@@ -1,307 +1,321 @@
 'use client'
 
-import { useState, useEffect } from 'react'
-import { nanoid } from 'nanoid'
-import { FlowNode as FlowNodeType, NodeType } from '../types/index'
-import FlowNode from '../components/FlowNode'
-import NodePalette from '../components/NodePalette'
-import ExportButton from '../components/ExportButton'
-import TemplateSelector from '../components/TemplateSelector'
-import AIChatSidebar from '../components/AIChatSidebar'
-import { ProjectTemplate } from '../lib/templates'
+import { useState } from 'react'
+
+interface FlowNode {
+  id: string
+  type: 'process' | 'decision' | 'start' | 'end'
+  label: string
+  x: number
+  y: number
+}
+
+interface FlowEdge {
+  from: string
+  to: string
+  label?: string
+}
+
+interface ProjectState {
+  planning: string
+  issues: string
+  outputType: 'mobile' | 'web' | 'hybrid'
+  nodes: FlowNode[]
+  edges: FlowEdge[]
+}
 
 export default function Home() {
-  const [projectTitle, setProjectTitle] = useState('')
-  const [projectSummary, setProjectSummary] = useState('')
-  const [nodes, setNodes] = useState<FlowNodeType[]>([])
-  const [selectedNode, setSelectedNode] = useState<string | null>(null)
-  const [showTemplates, setShowTemplates] = useState(false)
-  const [showSaveSuccess, setShowSaveSuccess] = useState(false)
-  const [hasSavedProject, setHasSavedProject] = useState(false)
+  const [prompt, setPrompt] = useState('')
+  const [isGenerating, setIsGenerating] = useState(false)
   const [showAIChat, setShowAIChat] = useState(false)
+  const [project, setProject] = useState<ProjectState>({
+    planning: '',
+    issues: '',
+    outputType: 'web',
+    nodes: [],
+    edges: []
+  })
+  const [aiSuggestion, setAiSuggestion] = useState('')
 
-  // Check for saved project on load
-  useEffect(() => {
-    const saved = localStorage.getItem('blueprintos-project')
-    if (saved) {
-      setHasSavedProject(true)
-    }
-  }, [])
+  const generateFlowchart = async () => {
+    if (!prompt.trim()) return
+    setIsGenerating(true)
 
-  const addNode = (type: NodeType) => {
-    const newNode: FlowNodeType = {
-      id: nanoid(),
-      type,
-      content: '',
-      x: 100 + (nodes.length % 3) * 320,
-      y: 100 + Math.floor(nodes.length / 3) * 200,
-    }
-    setNodes([...nodes, newNode])
-  }
+    try {
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messages: [{
+            role: 'user',
+            content: `Generate a flowchart for: "${prompt}". 
+                        
+Return ONLY valid JSON in this exact format (no markdown, no explanation):
+{
+    "nodes": [
+        {"id": "1", "type": "start", "label": "Start", "x": 300, "y": 50},
+        {"id": "2", "type": "process", "label": "Step 1", "x": 300, "y": 150},
+        {"id": "3", "type": "decision", "label": "Condition?", "x": 300, "y": 250},
+        {"id": "4", "type": "end", "label": "End", "x": 300, "y": 350}
+    ],
+    "edges": [
+        {"from": "1", "to": "2"},
+        {"from": "2", "to": "3"},
+        {"from": "3", "to": "4", "label": "Yes"}
+    ]
+}
 
-  const deleteNode = (id: string) => {
-    setNodes(nodes.filter(n => n.id !== id))
-    if (selectedNode === id) setSelectedNode(null)
-  }
+Types: start (oval), end (oval), process (rectangle), decision (diamond).
+Position nodes vertically with y increasing by 100 for each row.
+Create meaningful labels based on the user's description.`
+          }],
+          model: 'claude',
+          context: ''
+        })
+      })
 
-  const updateNode = (id: string, content: string) => {
-    setNodes(nodes.map(n => n.id === id ? { ...n, content } : n))
-  }
+      const data = await response.json()
+      const content = data.message || data.content
 
-  const handleSelectTemplate = (template: ProjectTemplate) => {
-    setProjectTitle(template.defaultTitle)
-    setProjectSummary(template.defaultSummary)
-
-    const newNodes: FlowNodeType[] = template.nodes.map((node, idx) => ({
-      id: nanoid(),
-      type: node.type,
-      content: node.content,
-      x: 100 + (idx % 3) * 320,
-      y: 100 + Math.floor(idx / 3) * 200,
-    }))
-    setNodes(newNodes)
-  }
-
-  const handleSave = () => {
-    const projectData = {
-      title: projectTitle,
-      summary: projectSummary,
-      nodes: nodes,
-      savedAt: new Date().toISOString()
-    }
-    localStorage.setItem('blueprintos-project', JSON.stringify(projectData))
-    setShowSaveSuccess(true)
-    setHasSavedProject(true)
-    setTimeout(() => setShowSaveSuccess(false), 2000)
-  }
-
-  const handleLoad = () => {
-    const saved = localStorage.getItem('blueprintos-project')
-    if (saved) {
-      const projectData = JSON.parse(saved)
-      setProjectTitle(projectData.title || '')
-      setProjectSummary(projectData.summary || '')
-      setNodes(projectData.nodes || [])
-    }
-  }
-
-  const handleNewProject = () => {
-    if (nodes.length > 0) {
-      if (confirm('Projek semasa akan dipadam. Teruskan?')) {
-        setProjectTitle('')
-        setProjectSummary('')
-        setNodes([])
-        setShowTemplates(true)
+      // Parse JSON from response
+      const jsonMatch = content.match(/\{[\s\S]*\}/)
+      if (jsonMatch) {
+        const flowData = JSON.parse(jsonMatch[0])
+        setProject(prev => ({
+          ...prev,
+          nodes: flowData.nodes || [],
+          edges: flowData.edges || []
+        }))
       }
-    } else {
-      setShowTemplates(true)
+    } catch (error) {
+      console.error('Error generating flowchart:', error)
+    } finally {
+      setIsGenerating(false)
+    }
+  }
+
+  const analyzeProject = async () => {
+    setShowAIChat(true)
+    try {
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messages: [{
+            role: 'user',
+            content: `Analyze this project and give improvement suggestions:
+
+Planning: ${project.planning || 'Not specified'}
+Issues to solve: ${project.issues || 'Not specified'}
+Output type: ${project.outputType}
+Flowchart nodes: ${project.nodes.map(n => n.label).join(', ') || 'None'}
+
+Give 3-5 specific suggestions to improve this project.`
+          }],
+          model: 'claude',
+          context: ''
+        })
+      })
+
+      const data = await response.json()
+      setAiSuggestion(data.message || data.content)
+    } catch (error) {
+      console.error('Error analyzing:', error)
+    }
+  }
+
+  const getNodeStyle = (type: string) => {
+    switch (type) {
+      case 'start':
+      case 'end':
+        return 'bg-green-500 rounded-full px-6 py-3'
+      case 'decision':
+        return 'bg-yellow-400 rotate-45 w-24 h-24 flex items-center justify-center'
+      case 'process':
+      default:
+        return 'bg-blue-500 rounded-lg px-6 py-3'
     }
   }
 
   return (
-    <div className="min-h-screen text-white bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
+    <main className="min-h-screen bg-slate-900 text-white">
       {/* Header */}
-      <header className="bg-slate-900/80 backdrop-blur-xl border-b border-slate-700 px-6 py-4 sticky top-0 z-50">
-        <div className="flex items-center justify-between">
+      <header className="bg-slate-800 border-b border-slate-700 px-6 py-4">
+        <div className="flex items-center justify-between max-w-7xl mx-auto">
           <div className="flex items-center gap-3">
-            <div className="w-12 h-12 bg-gradient-to-br from-amber-400 to-orange-500 rounded-xl flex items-center justify-center text-2xl shadow-lg shadow-amber-500/30">
+            <div className="w-10 h-10 bg-gradient-to-br from-amber-400 to-orange-500 rounded-xl flex items-center justify-center text-xl">
               ⚡
             </div>
             <div>
-              <h1 className="text-xl font-bold bg-gradient-to-r from-amber-200 to-orange-300 bg-clip-text text-transparent">
-                AI FlowChart Builder
-              </h1>
-              <p className="text-xs text-slate-500">Powered by Claude • Codex • DeepSeek</p>
+              <h1 className="text-xl font-bold">AI FlowChart Builder</h1>
+              <p className="text-xs text-slate-400">Powered by Claude Opus 4</p>
             </div>
           </div>
-
-          {/* Action Buttons */}
-          <div className="flex items-center gap-3">
-            {/* New Project */}
-            <button
-              onClick={handleNewProject}
-              className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold bg-slate-700 hover:bg-slate-600 text-white transition-all hover:scale-105"
-            >
-              <span>✨</span>
-              <span className="hidden sm:inline">Projek Baru</span>
-            </button>
-
-            {/* Template Button */}
-            <button
-              onClick={() => setShowTemplates(true)}
-              className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold bg-gradient-to-r from-violet-500 to-purple-500 hover:from-violet-400 hover:to-purple-400 text-white shadow-lg shadow-violet-500/30 transition-all hover:scale-105"
-            >
-              <span>🎨</span>
-              <span className="hidden sm:inline">Template</span>
-            </button>
-
-            {/* Save Button */}
-            <button
-              onClick={handleSave}
-              className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold transition-all hover:scale-105 ${showSaveSuccess
-                ? 'bg-green-500 text-white'
-                : 'bg-slate-700 hover:bg-slate-600 text-white'
-                }`}
-            >
-              <span>{showSaveSuccess ? '✅' : '💾'}</span>
-              <span className="hidden sm:inline">{showSaveSuccess ? 'Tersimpan!' : 'Simpan'}</span>
-            </button>
-
-            {/* Load Button */}
-            {hasSavedProject && (
-              <button
-                onClick={handleLoad}
-                className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold bg-slate-700 hover:bg-slate-600 text-white transition-all hover:scale-105"
-              >
-                <span>📂</span>
-                <span className="hidden sm:inline">Muat</span>
-              </button>
-            )}
-
-            {/* Export Button */}
-            <ExportButton
-              title={projectTitle}
-              summary={projectSummary}
-              nodes={nodes}
-            />
-
-            {/* AI Chat Button */}
-            <button
-              onClick={() => setShowAIChat(true)}
-              className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold bg-gradient-to-r from-pink-500 to-rose-500 hover:from-pink-400 hover:to-rose-400 text-white shadow-lg shadow-pink-500/30 transition-all hover:scale-105 animate-pulse"
-            >
-              <span>🤖</span>
-              <span className="hidden sm:inline">AI Chat</span>
-            </button>
-          </div>
+          <button
+            onClick={analyzeProject}
+            className="px-4 py-2 bg-gradient-to-r from-pink-500 to-rose-500 rounded-lg font-bold hover:scale-105 transition-all"
+          >
+            🤖 Analyze Project
+          </button>
         </div>
       </header>
 
-      <div className="flex h-[calc(100vh-73px)]">
-        {/* Sidebar */}
-        <aside className="w-72 bg-slate-900/50 backdrop-blur border-r border-slate-700 p-4 overflow-y-auto">
-          {/* Project Info */}
-          <div className="mb-6">
-            <h2 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-3 flex items-center gap-2">
-              <span>📋</span> Maklumat Projek
-            </h2>
-            <div className="space-y-3">
-              <input
-                type="text"
-                value={projectTitle}
-                onChange={(e) => setProjectTitle(e.target.value)}
-                placeholder="🎯 Tajuk projek..."
-                className="w-full bg-slate-800 border border-slate-600 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20 transition-all"
-              />
+      <div className="max-w-7xl mx-auto p-6">
+        {/* AI Prompt Input */}
+        <div className="bg-slate-800 rounded-2xl p-6 mb-6 border border-slate-700">
+          <h2 className="text-lg font-bold mb-3 flex items-center gap-2">
+            ✨ Generate Flowchart with AI
+          </h2>
+          <div className="flex gap-3">
+            <input
+              type="text"
+              value={prompt}
+              onChange={(e) => setPrompt(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && generateFlowchart()}
+              placeholder="Describe your process... e.g., 'User login flow with email verification'"
+              className="flex-1 bg-slate-700 border border-slate-600 rounded-xl px-4 py-3 focus:outline-none focus:border-amber-500"
+            />
+            <button
+              onClick={generateFlowchart}
+              disabled={isGenerating}
+              className="px-6 py-3 bg-gradient-to-r from-amber-500 to-orange-500 rounded-xl font-bold hover:scale-105 transition-all disabled:opacity-50"
+            >
+              {isGenerating ? '⏳ Generating...' : '🚀 Generate'}
+            </button>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {/* Left Sidebar - Project Details */}
+          <div className="space-y-4">
+            {/* Planning */}
+            <div className="bg-slate-800 rounded-xl p-4 border border-slate-700">
+              <h3 className="font-bold mb-2 text-amber-400">📋 Planning</h3>
               <textarea
-                value={projectSummary}
-                onChange={(e) => setProjectSummary(e.target.value)}
-                placeholder="📝 Ringkasan projek..."
-                rows={3}
-                className="w-full bg-slate-800 border border-slate-600 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20 resize-none transition-all"
+                value={project.planning}
+                onChange={(e) => setProject(p => ({ ...p, planning: e.target.value }))}
+                placeholder="Describe your project plan..."
+                className="w-full bg-slate-700 border border-slate-600 rounded-lg p-3 h-32 resize-none focus:outline-none focus:border-amber-500"
               />
             </div>
-          </div>
 
-          {/* Node Stats */}
-          {nodes.length > 0 && (
-            <div className="mb-6 p-3 bg-slate-800/50 rounded-xl border border-slate-700">
-              <div className="flex items-center justify-between text-sm">
-                <span className="text-slate-400">Jumlah Nodes:</span>
-                <span className="font-bold text-amber-400">{nodes.length}</span>
+            {/* Issues */}
+            <div className="bg-slate-800 rounded-xl p-4 border border-slate-700">
+              <h3 className="font-bold mb-2 text-rose-400">🔧 Issues to Solve</h3>
+              <textarea
+                value={project.issues}
+                onChange={(e) => setProject(p => ({ ...p, issues: e.target.value }))}
+                placeholder="What problems are you solving?"
+                className="w-full bg-slate-700 border border-slate-600 rounded-lg p-3 h-32 resize-none focus:outline-none focus:border-amber-500"
+              />
+            </div>
+
+            {/* Output Type */}
+            <div className="bg-slate-800 rounded-xl p-4 border border-slate-700">
+              <h3 className="font-bold mb-3 text-blue-400">📱 Output Type</h3>
+              <div className="space-y-2">
+                {['mobile', 'web', 'hybrid'].map((type) => (
+                  <label key={type} className="flex items-center gap-3 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="outputType"
+                      value={type}
+                      checked={project.outputType === type}
+                      onChange={() => setProject(p => ({ ...p, outputType: type as 'mobile' | 'web' | 'hybrid' }))}
+                      className="w-4 h-4 accent-amber-500"
+                    />
+                    <span className="capitalize">{type}</span>
+                  </label>
+                ))}
               </div>
             </div>
-          )}
-
-          <NodePalette onAddNode={addNode} />
-
-          {/* Tips for Kids */}
-          <div className="mt-6 p-4 bg-gradient-to-br from-amber-500/10 to-orange-500/10 rounded-xl border border-amber-500/20">
-            <div className="flex items-start gap-2">
-              <span className="text-xl">💡</span>
-              <div>
-                <h4 className="font-bold text-amber-300 text-sm">Tips</h4>
-                <p className="text-xs text-slate-400 mt-1">
-                  Klik pada butang di atas untuk tambah idea baru!
-                  Bila siap, tekan "Export untuk AI" 🚀
-                </p>
-              </div>
-            </div>
           </div>
-        </aside>
 
-        {/* Main Canvas */}
-        <main className="flex-1 p-6 overflow-auto">
-          {nodes.length === 0 ? (
-            /* Welcome Screen */
-            <div className="h-full flex items-center justify-center">
-              <div className="text-center max-w-md">
-                <div className="text-8xl mb-6 animate-bounce">🚀</div>
-                <h2 className="text-3xl font-bold text-white mb-3">
-                  Selamat Datang!
-                </h2>
-                <p className="text-slate-400 mb-8">
-                  Mari rancang projek hebat anda. Pilih template untuk mula dengan cepat,
-                  atau tambah node satu persatu dari panel kiri.
-                </p>
-                <div className="flex flex-col sm:flex-row gap-4 justify-center">
-                  <button
-                    onClick={() => setShowTemplates(true)}
-                    className="flex items-center justify-center gap-2 px-6 py-3 rounded-xl font-bold bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-white shadow-lg shadow-amber-500/30 transition-all hover:scale-105"
-                  >
-                    <span>🎨</span> Pilih Template
-                  </button>
-                  <button
-                    onClick={() => addNode('title')}
-                    className="flex items-center justify-center gap-2 px-6 py-3 rounded-xl font-bold bg-slate-700 hover:bg-slate-600 text-white transition-all hover:scale-105"
-                  >
-                    <span>➕</span> Mula Kosong
-                  </button>
+          {/* Flowchart Canvas */}
+          <div className="lg:col-span-2 bg-slate-800 rounded-xl border border-slate-700 overflow-hidden">
+            <div className="bg-slate-700 px-4 py-2 border-b border-slate-600 flex items-center gap-2">
+              <span className="font-bold">📊 Flowchart Canvas</span>
+              {project.nodes.length > 0 && (
+                <span className="text-xs text-slate-400">({project.nodes.length} nodes)</span>
+              )}
+            </div>
+
+            <div className="relative h-[500px] bg-slate-900 overflow-auto" style={{ backgroundImage: 'radial-gradient(circle, #334155 1px, transparent 1px)', backgroundSize: '20px 20px' }}>
+              {project.nodes.length === 0 ? (
+                <div className="absolute inset-0 flex items-center justify-center text-slate-500">
+                  <div className="text-center">
+                    <p className="text-4xl mb-2">🎨</p>
+                    <p>Enter a prompt above to generate a flowchart</p>
+                  </div>
                 </div>
+              ) : (
+                <svg className="absolute inset-0 w-full h-full pointer-events-none">
+                  {project.edges.map((edge, i) => {
+                    const fromNode = project.nodes.find(n => n.id === edge.from)
+                    const toNode = project.nodes.find(n => n.id === edge.to)
+                    if (!fromNode || !toNode) return null
+                    return (
+                      <g key={i}>
+                        <line
+                          x1={fromNode.x}
+                          y1={fromNode.y + 30}
+                          x2={toNode.x}
+                          y2={toNode.y - 30}
+                          stroke="#f59e0b"
+                          strokeWidth="2"
+                          markerEnd="url(#arrowhead)"
+                        />
+                        {edge.label && (
+                          <text
+                            x={(fromNode.x + toNode.x) / 2 + 10}
+                            y={(fromNode.y + toNode.y) / 2}
+                            fill="#94a3b8"
+                            fontSize="12"
+                          >
+                            {edge.label}
+                          </text>
+                        )}
+                      </g>
+                    )
+                  })}
+                  <defs>
+                    <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+                      <polygon points="0 0, 10 3.5, 0 7" fill="#f59e0b" />
+                    </marker>
+                  </defs>
+                </svg>
+              )}
 
-                {hasSavedProject && (
-                  <button
-                    onClick={handleLoad}
-                    className="mt-6 flex items-center justify-center gap-2 px-6 py-3 rounded-xl font-bold bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-white shadow-lg shadow-emerald-500/30 transition-all hover:scale-105 mx-auto"
-                  >
-                    <span>📂</span> Muat Projek Tersimpan
-                  </button>
-                )}
-              </div>
-            </div>
-          ) : (
-            /* Nodes Grid */
-            <div className="flex flex-wrap gap-4">
-              {nodes.map(node => (
-                <FlowNode
+              {project.nodes.map((node) => (
+                <div
                   key={node.id}
-                  node={node}
-                  isSelected={selectedNode === node.id}
-                  onSelect={setSelectedNode}
-                  onDelete={deleteNode}
-                  onUpdate={updateNode}
-                />
+                  className={`absolute transform -translate-x-1/2 -translate-y-1/2 text-center font-bold shadow-lg ${getNodeStyle(node.type)}`}
+                  style={{ left: node.x, top: node.y }}
+                >
+                  {node.type === 'decision' ? (
+                    <span className="-rotate-45 block text-black text-sm">{node.label}</span>
+                  ) : (
+                    <span className="text-white">{node.label}</span>
+                  )}
+                </div>
               ))}
             </div>
-          )}
-        </main>
+          </div>
+        </div>
+
+        {/* AI Suggestions Panel */}
+        {showAIChat && aiSuggestion && (
+          <div className="mt-6 bg-slate-800 rounded-xl p-6 border border-amber-500/50">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-bold text-amber-400">🤖 AI Analysis & Suggestions</h3>
+              <button onClick={() => setShowAIChat(false)} className="text-slate-400 hover:text-white">✕</button>
+            </div>
+            <div className="prose prose-invert max-w-none whitespace-pre-wrap">
+              {aiSuggestion}
+            </div>
+          </div>
+        )}
       </div>
-
-      {/* Template Selector Modal */}
-      <TemplateSelector
-        isOpen={showTemplates}
-        onClose={() => setShowTemplates(false)}
-        onSelectTemplate={handleSelectTemplate}
-      />
-
-      {/* AI Chat Sidebar */}
-      <AIChatSidebar
-        isOpen={showAIChat}
-        onClose={() => setShowAIChat(false)}
-        projectTitle={projectTitle}
-        projectSummary={projectSummary}
-        nodes={nodes}
-      />
-    </div>
+    </main>
   )
 }
